@@ -43,6 +43,47 @@ storage_manager = StorageManager()
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
+def handle_task_error(task_id, error):
+    """Handle task errors by updating task status and logging"""
+    logger.error(f"Error in task {task_id}: {str(error)}")
+    try:
+        tasks = load_tasks()
+        if task_id in tasks:
+            tasks[task_id].update({
+                'status': 'failed',
+                'error': str(error),
+                'completed_time': datetime.now().isoformat()
+            })
+            save_tasks(tasks)
+    except Exception as e:
+        logger.error(f"Error updating task status: {str(e)}")
+
+def check_and_get_size(url, video_format=None, audio_format=None):
+    """Estimate the size of the download"""
+    try:
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'format': f'{video_format}+{audio_format}/best' if video_format else f'{audio_format}/best'
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            
+            if 'requested_formats' in info:
+                # For merged formats (video + audio)
+                total_size = sum(f.get('filesize', 0) or f.get('filesize_approx', 0) 
+                               for f in info['requested_formats'])
+            else:
+                # For single format
+                total_size = info.get('filesize', 0) or info.get('filesize_approx', 0)
+            
+            # Add 10% buffer for safety
+            return int(total_size * 1.1)
+    except Exception as e:
+        logger.error(f"Error estimating file size: {str(e)}")
+        return 0
+
 def get_public_url(file_path, bucket_name):
     """Generate a public GCS URL for the file"""
     clean_path = file_path.replace('/files/', '')
@@ -127,6 +168,89 @@ def send_webhook_notification(task_id, file_path, base_url=None):
         })
         save_tasks(tasks)
 
+def cleanup_processing_tasks():
+    """Clean up tasks that have been processing for too long"""
+    try:
+        tasks = load_tasks()
+        current_time = datetime.now()
+        
+        for task_id, task in list(tasks.items()):
+            if task['status'] == 'processing':
+                # Check if task has been processing for too long
+                started_time = datetime.fromisoformat(task.get('started_time', '2000-01-01T00:00:00'))
+                if current_time - started_time > timedelta(minutes=TASK_CLEANUP_TIME):
+                    logger.warning(f"Cleaning up stalled task {task_id}")
+                    cleanup_task(task_id)
+    except Exception as e:
+        logger.error(f"Error in cleanup_processing_tasks: {str(e)}")
+
+def process_tasks():
+    """Background task processor"""
+    logger.info("Starting task processor")
+    while True:
+        try:
+            tasks = load_tasks()
+            for task_id, task in list(tasks.items()):
+                if task['status'] == 'waiting':
+                    # Update task status
+                    tasks[task_id].update({
+                        'status': 'processing',
+                        'started_time': datetime.now().isoformat()
+                    })
+                    save_tasks(tasks)
+                    
+                    # Process based on task type
+                    if task['task_type'] == 'get_video':
+                        executor.submit(
+                            get,
+                            task_id,
+                            task['url'],
+                            'video',
+                            task.get('video_format', 'bestvideo'),
+                            task.get('audio_format', 'bestaudio')
+                        )
+                    elif task['task_type'] == 'get_audio':
+                        executor.submit(
+                            get,
+                            task_id,
+                            task['url'],
+                            'audio',
+                            None,
+                            task.get('audio_format', 'bestaudio')
+                        )
+                    elif task['task_type'] == 'get_info':
+                        executor.submit(get_info, task_id, task['url'])
+                    elif task['task_type'] == 'get_live_video':
+                        executor.submit(
+                            get_live,
+                            task_id,
+                            task['url'],
+                            'video',
+                            task.get('start', 0),
+                            task.get('duration', 300),
+                            task.get('video_format', 'bestvideo'),
+                            task.get('audio_format', 'bestaudio')
+                        )
+                    elif task['task_type'] == 'get_live_audio':
+                        executor.submit(
+                            get_live,
+                            task_id,
+                            task['url'],
+                            'audio',
+                            task.get('start', 0),
+                            task.get('duration', 300),
+                            None,
+                            task.get('audio_format', 'bestaudio')
+                        )
+            
+            # Cleanup old tasks
+            cleanup_processing_tasks()
+            time.sleep(1)  # Prevent CPU overuse
+            
+        except Exception as e:
+            logger.error(f"Error in process_tasks: {str(e)}")
+            time.sleep(5)  # Wait before retrying
+    
 def get_info(task_id, url):
     try:
         tasks = load_tasks()
@@ -171,10 +295,10 @@ def get(task_id, url, type, video_format="bestvideo", audio_format="bestaudio"):
         tasks[task_id].update(status='processing')
         save_tasks(tasks)
 
-        print(f"Starting download for task {task_id} - URL: {url}")
+        logger.info(f"Starting download for task {task_id} - URL: {url}")
         
         total_size = check_and_get_size(url, video_format if type.lower() == 'video' else None, audio_format)
-        print(f"Calculated total size: {total_size}")
+        logger.info(f"Calculated total size: {total_size}")
         
         if total_size <= 0:
             total_size = 100 * 1024 * 1024  # Use 100MB as fallback
@@ -239,11 +363,11 @@ def get(task_id, url, type, video_format="bestvideo", audio_format="bestaudio"):
             shutil.rmtree(temp_path, ignore_errors=True)
             
         except Exception as e:
-            print(f"Download error: {str(e)}")
+            logger.error(f"Download error: {str(e)}")
             handle_task_error(task_id, str(e))
             
     except Exception as e:
-        print(f"Task error: {str(e)}")
+        logger.error(f"Task error: {str(e)}")
         handle_task_error(task_id, str(e))
 
 def get_live(task_id, url, type, start, duration, video_format="bestvideo", audio_format="bestaudio"):
@@ -324,7 +448,7 @@ def cleanup_orphaned_folders():
         folder_path = os.path.join(DOWNLOAD_DIR, folder)
         if os.path.isdir(folder_path) and folder not in task_ids:
             shutil.rmtree(folder_path, ignore_errors=True)
-            print(f"Removed orphaned local folder: {folder_path}")
+            logger.info(f"Removed orphaned local folder: {folder_path}")
 
     if USE_GCS:
         # Clean up GCS folders
@@ -333,7 +457,7 @@ def cleanup_orphaned_folders():
             task_id = blob.name.split('/')[0]
             if task_id not in task_ids:
                 blob.delete()
-                print(f"Removed orphaned GCS file: {blob.name}")
+                logger.info(f"Removed orphaned GCS file: {blob.name}")
 
 
 

@@ -1,8 +1,9 @@
 services:
   yt-dlp-host:
     build: .
+    platform: linux/amd64
     ports:
-      - "5000:5000"
+      - "5000:8080"  # Changed to match Dockerfile's port
     volumes:
       - ./downloads:/app/downloads
       - ./jsons:/app/jsons
@@ -10,4 +11,7 @@ services:
     environment:
       - FLASK_APP=src.server:app
       - FLASK_RUN_HOST=0.0.0.0
+      - PORT=8080
+      - USE_GCS=True
+      - GCS_BUCKET_NAME=nca-toolkit-bucket-jimeny
     restart: unless-stopped
