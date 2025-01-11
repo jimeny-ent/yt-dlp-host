@@ -56,8 +56,16 @@ def check_and_get_size(url, video_format=None, audio_format=None):
             'no_warnings': True,
             'extract_flat': False,
             'skip_download': True,
+            # Add Cloudflare-specific options
+            'format': 'bestvideo+bestaudio/best',  # This is important for DASH manifests
+            'allow_unplayable_formats': True,
+            'no_check_certificate': True,
             'http_headers': {
-                'Referer': 'https://portal.tiersoffreedom.com'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': '*/*',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Origin': 'https://cloudflarestream.com',
+                'Referer': 'https://cloudflarestream.com/'
             }
         }
         
@@ -66,27 +74,33 @@ def check_and_get_size(url, video_format=None, audio_format=None):
             formats = info['formats']
             total_size = 0
             
+            # Modified size calculation for DASH/HLS streams
             if video_format:
-                if video_format == 'bestvideo':
-                    video_formats = [f for f in formats if f.get('vcodec') != 'none' and f.get('acodec') == 'none']
-                    best_video = get_best_format_size(info, formats, video_formats, is_video=True)
-                    total_size += best_video.get('filesize') or best_video.get('filesize_approx', 0)
-                else:
-                    format_info = next((f for f in formats if f.get('format_id') == video_format), None)
-                    if format_info:
-                        total_size += format_info.get('filesize') or format_info.get('filesize_approx', 0)
+                if video_format in ('best', 'bestvideo'):
+                    video_formats = [f for f in formats if f.get('vcodec') != 'none']
+                    if video_formats:
+                        best_video = max(video_formats, 
+                                      key=lambda f: (f.get('height', 0) or 0, f.get('tbr', 0) or 0))
+                        total_size += best_video.get('filesize') or best_video.get('filesize_approx', 0)
+                        if not total_size and best_video.get('tbr'):
+                            # Estimate size based on bitrate if filesize is not available
+                            total_size = int((best_video['tbr'] * 1024 * info.get('duration', 0)) / 8)
 
             if audio_format:
-                if audio_format == 'bestaudio':
-                    audio_formats = [f for f in formats if f.get('acodec') != 'none' and f.get('vcodec') == 'none']
-                    best_audio = get_best_format_size(info, formats, audio_formats, is_video=False)
-                    total_size += best_audio.get('filesize') or best_audio.get('filesize_approx', 0)
-                else:
-                    format_info = next((f for f in formats if f.get('format_id') == audio_format), None)
-                    if format_info:
-                        total_size += format_info.get('filesize') or format_info.get('filesize_approx', 0)
-            total_size = int(total_size * 1.10)            
-            return total_size if total_size > 0 else -1 
+                if audio_format in ('best', 'bestaudio'):
+                    audio_formats = [f for f in formats if f.get('acodec') != 'none']
+                    if audio_formats:
+                        best_audio = max(audio_formats,
+                                      key=lambda f: f.get('tbr', 0) or 0)
+                        total_size += best_audio.get('filesize') or best_audio.get('filesize_approx', 0)
+                        if not total_size and best_audio.get('tbr'):
+                            # Estimate size based on bitrate if filesize is not available
+                            total_size = int((best_audio['tbr'] * 128 * info.get('duration', 0)) / 8)
+
+            # Add 10% buffer to the estimated size
+            total_size = int(total_size * 1.10)
+            return total_size if total_size > 0 else -1
+
     except Exception as e:
         print(f"Error in check_and_get_size: {str(e)}")
         return -1
@@ -101,15 +115,7 @@ def get_info(task_id, url):
         if not os.path.exists(download_path):
             os.makedirs(download_path)
 
-        ydl_opts = {
-            'quiet': True, 
-            'no_warnings': True, 
-            'extract_flat': True, 
-            'skip_download': True,
-            'http_headers': {
-                'Referer': 'https://portal.tiersoffreedom.com'
-            }
-        }
+        ydl_opts = {'quiet': True, 'no_warnings': True, 'extract_flat': True, 'skip_download': True}
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -163,12 +169,17 @@ def get(task_id, url, type, video_format="bestvideo", audio_format="bestaudio"):
         ydl_opts = {
             'format': format_option,
             'outtmpl': os.path.join(download_path, output_template),
-            'merge_output_format': 'mp4' if type.lower() == 'video' else None
+            'merge_output_format': 'mp4' if type.lower() == 'video' else None,
+            'allow_unplayable_formats': True,
+            'no_check_certificate': True,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': '*/*',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Origin': 'https://cloudflarestream.com',
+                'Referer': 'https://cloudflarestream.com/'
+            }
         }
-
-        add_headers = tasks[task_id].get('add_header', [])
-        if add_headers:
-            ydl_opts['add_headers'] = add_headers
 
         if tasks[task_id].get('start_time') or tasks[task_id].get('end_time'):
             start_time = tasks[task_id].get('start_time') or '00:00:00'
@@ -221,10 +232,7 @@ def get_live(task_id, url, type, start, duration, video_format="bestvideo", audi
             'format': format_option,
             'outtmpl': os.path.join(download_path, output_template),
             'download_ranges': lambda info, *args: [{'start_time': start_time, 'end_time': end_time,}],
-            'merge_output_format': 'mp4' if type.lower() == 'video' else None,
-            'http_headers': {
-                'Referer': 'https://portal.tiersoffreedom.com'
-            }
+            'merge_output_format': 'mp4' if type.lower() == 'video' else None
         }
         
         try:
