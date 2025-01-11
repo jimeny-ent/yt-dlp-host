@@ -56,8 +56,7 @@ def check_and_get_size(url, video_format=None, audio_format=None):
             'no_warnings': True,
             'extract_flat': False,
             'skip_download': True,
-            # Add Cloudflare-specific options
-            'format': 'bestvideo+bestaudio/best',  # This is important for DASH manifests
+            'format': 'bestvideo+bestaudio/best',
             'allow_unplayable_formats': True,
             'no_check_certificate': True,
             'http_headers': {
@@ -71,39 +70,44 @@ def check_and_get_size(url, video_format=None, audio_format=None):
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            formats = info['formats']
-            total_size = 0
             
-            # Modified size calculation for DASH/HLS streams
-            if video_format:
-                if video_format in ('best', 'bestvideo'):
+            # For DASH/MPD manifests from Cloudflare Stream
+            if 'formats' in info:
+                formats = info['formats']
+                total_size = 0
+                
+                if video_format:
                     video_formats = [f for f in formats if f.get('vcodec') != 'none']
                     if video_formats:
                         best_video = max(video_formats, 
                                       key=lambda f: (f.get('height', 0) or 0, f.get('tbr', 0) or 0))
-                        total_size += best_video.get('filesize') or best_video.get('filesize_approx', 0)
-                        if not total_size and best_video.get('tbr'):
-                            # Estimate size based on bitrate if filesize is not available
-                            total_size = int((best_video['tbr'] * 1024 * info.get('duration', 0)) / 8)
-
-            if audio_format:
-                if audio_format in ('best', 'bestaudio'):
+                        if best_video.get('filesize') or best_video.get('filesize_approx'):
+                            total_size += best_video.get('filesize') or best_video.get('filesize_approx')
+                        elif best_video.get('tbr'):
+                            # Estimate from bitrate and duration
+                            total_size += int((best_video['tbr'] * 1024 * info.get('duration', 300)) / 8)
+                
+                if audio_format:
                     audio_formats = [f for f in formats if f.get('acodec') != 'none']
                     if audio_formats:
                         best_audio = max(audio_formats,
                                       key=lambda f: f.get('tbr', 0) or 0)
-                        total_size += best_audio.get('filesize') or best_audio.get('filesize_approx', 0)
-                        if not total_size and best_audio.get('tbr'):
-                            # Estimate size based on bitrate if filesize is not available
-                            total_size = int((best_audio['tbr'] * 128 * info.get('duration', 0)) / 8)
+                        if best_audio.get('filesize') or best_audio.get('filesize_approx'):
+                            total_size += best_audio.get('filesize') or best_audio.get('filesize_approx')
+                        elif best_audio.get('tbr'):
+                            # Estimate from bitrate and duration
+                            total_size += int((best_audio['tbr'] * 128 * info.get('duration', 300)) / 8)
+                
+                # Add 20% buffer for MPD overhead
+                if total_size > 0:
+                    return int(total_size * 1.2)
 
-            # Add 10% buffer to the estimated size
-            total_size = int(total_size * 1.10)
-            return total_size if total_size > 0 else -1
+            # Default size for unknown formats
+            return 100 * 1024 * 1024  # 100MB default
 
     except Exception as e:
         print(f"Error in check_and_get_size: {str(e)}")
-        return -1
+        return 100 * 1024 * 1024  # Return default size instead of -1
 
 def get_info(task_id, url):
     try:
@@ -142,9 +146,9 @@ def get(task_id, url, type, video_format="bestvideo", audio_format="bestaudio"):
         tasks[task_id].update(status='processing')
         save_tasks(tasks)
 
+        # Get size estimate but don't fail on error
         total_size = check_and_get_size(url, video_format if type.lower() == 'video' else None, audio_format)
-        if total_size <= 0: handle_task_error(task_id, f"Error getting size: {total_size}")
-
+        
         key_name = tasks[task_id].get('key_name')
         keys = load_keys()
         if key_name not in keys:
@@ -159,16 +163,9 @@ def get(task_id, url, type, video_format="bestvideo", audio_format="bestaudio"):
         if not os.path.exists(download_path):
             os.makedirs(download_path)
 
-        if type.lower() == 'audio':
-            format_option = f'{audio_format}/best'
-            output_template = f'audio.%(ext)s'
-        else:
-            format_option = f'{video_format}+{audio_format}/best'
-            output_template = f'video.%(ext)s'
-
         ydl_opts = {
-            'format': format_option,
-            'outtmpl': os.path.join(download_path, output_template),
+            'format': f'{video_format}+{audio_format}/best' if type.lower() == 'video' else f'{audio_format}/best',
+            'outtmpl': os.path.join(download_path, 'video.%(ext)s' if type.lower() == 'video' else 'audio.%(ext)s'),
             'merge_output_format': 'mp4' if type.lower() == 'video' else None,
             'allow_unplayable_formats': True,
             'no_check_certificate': True,
@@ -178,34 +175,30 @@ def get(task_id, url, type, video_format="bestvideo", audio_format="bestaudio"):
                 'Accept-Encoding': 'gzip, deflate, br',
                 'Origin': 'https://cloudflarestream.com',
                 'Referer': 'https://cloudflarestream.com/'
-            }
+            },
+            'verbose': True,
+            # Support for DASH manifests
+            'external_downloader_args': ['--no-check-certificate'],
+            'concurrent_fragments': 5
         }
 
-        if tasks[task_id].get('start_time') or tasks[task_id].get('end_time'):
-            start_time = tasks[task_id].get('start_time') or '00:00:00'
-            end_time = tasks[task_id].get('end_time') or '10:00:00'
-
-            def time_to_seconds(time_str):
-                h, m, s = time_str.split(':')
-                return float(h) * 3600 + float(m) * 60 + float(s)
-            start_seconds = time_to_seconds(start_time)
-            end_seconds = time_to_seconds(end_time)
-
-            ydl_opts['download_ranges'] = download_range_func(None, [(start_seconds, end_seconds)])
-            ydl_opts['force_keyframes_at_cuts'] = tasks[task_id].get('force_keyframes', False)
-        
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
+            
             tasks = load_tasks()
             tasks[task_id].update(status='completed')
             tasks[task_id]['completed_time'] = datetime.now().isoformat()
             tasks[task_id]['file'] = f'/files/{task_id}/' + os.listdir(download_path)[0]
             save_tasks(tasks)
+            
         except Exception as e:
-            handle_task_error(task_id, e)
+            print(f"Download error: {str(e)}")
+            handle_task_error(task_id, str(e))
+            
     except Exception as e:
-        handle_task_error(task_id, e)
+        print(f"Task error: {str(e)}")
+        handle_task_error(task_id, str(e))
 
 def get_live(task_id, url, type, start, duration, video_format="bestvideo", audio_format="bestaudio"):
     try:
