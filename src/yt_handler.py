@@ -127,42 +127,6 @@ def send_webhook_notification(task_id, file_path, base_url=None):
         })
         save_tasks(tasks)
 
-    """Enhanced webhook notification handler"""
-    from config import GCS_BUCKET_NAME, USE_GCS
-    logger = logging.getLogger(__name__)
-    tasks = load_tasks()
-    task = tasks.get(task_id)
-    
-    if not task or not task.get('webhook_url'):
-        return
-    
-    try:
-        # Generate the appropriate file URL
-        if USE_GCS:
-            file_url = get_public_url(file_path, GCS_BUCKET_NAME)
-        else:
-            if base_url is None:
-                base_url = os.environ.get('APP_BASE_URL', 'http://localhost:5000')
-            file_url = f"{base_url.rstrip('/')}{file_path}"
-        
-        webhook_data = {
-            'status': 'completed',
-            'task_id': task_id,
-            'file_url': file_url,
-            'task_type': task.get('task_type', 'unknown'),
-            'original_url': task.get('url'),
-            'completion_time': datetime.now().isoformat()
-        }
-        
-        logger.info(f"Sending webhook for task {task_id} to {task['webhook_url']}")
-        success = notify_webhook(task['webhook_url'], webhook_data)
-        
-        if not success:
-            logger.error(f"Failed to send webhook for task {task_id}")
-            
-    except Exception as e:
-        logger.error(f"Error in webhook notification for task {task_id}: {str(e)}")
-
 def get_info(task_id, url):
     try:
         tasks = load_tasks()
@@ -371,7 +335,7 @@ def cleanup_orphaned_folders():
                 blob.delete()
                 print(f"Removed orphaned GCS file: {blob.name}")
 
-# [Rest of the code remains the same: cleanup_processing_tasks, process_tasks, etc.]
+
 
 cleanup_processing_tasks()
 cleanup_orphaned_folders()
