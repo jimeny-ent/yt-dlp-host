@@ -2,3 +2,5 @@
 /downloads
 /venv
 /__pycache__
+/.DS_Store
+Dockerfile-old

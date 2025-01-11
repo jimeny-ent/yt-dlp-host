@@ -10,4 +10,11 @@ RUN apt update && \
 
 COPY . .
 
-CMD ["flask", "run"]
+ENV PORT=8080
+ENV FLASK_APP=src/server.py
+ENV FLASK_ENV=production
+
+EXPOSE 8080
+
+# Use gunicorn for production
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 "src.server:app"
