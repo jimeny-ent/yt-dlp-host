@@ -6,7 +6,7 @@ TASKS_FILE = os.getenv('TASKS_FILE', 'jsons/tasks.json')
 KEYS_FILE = os.getenv('KEYS_FILE', 'jsons/api_keys.json')
 
 # Google Cloud Storage settings
-GCS_BUCKET_NAME = os.getenv('GCS_BUCKET_NAME', 'nca-toolkit-bucket-jimeny')
+GCS_BUCKET_NAME = os.getenv('GCS_BUCKET_NAME')
 USE_GCS = os.getenv('USE_GCS', 'True').lower() == 'true'
 
 # Task management

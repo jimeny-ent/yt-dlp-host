@@ -1,68 +1,167 @@
-from datetime import datetime, timedelta
+# Standard library imports
+import json
+import logging
+import os
+import shutil
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
-from config import DOWNLOAD_DIR, TASK_CLEANUP_TIME, MAX_WORKERS, USE_GCS
-from src.json_utils import load_tasks, save_tasks, load_keys
-from src.auth import check_memory_limit
-from src.storage_utils import StorageManager
-import yt_dlp, os, threading, json, time, shutil
-from yt_dlp.utils import download_range_func
-import requests
-from flask import current_app, request
+from datetime import datetime, timedelta
 
+# Third-party imports
+import requests
+import yt_dlp
+from flask import current_app, request
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
+from yt_dlp.utils import download_range_func
+
+# Local application imports
+from config import (
+    DOWNLOAD_DIR,
+    GCS_BUCKET_NAME,
+    MAX_WORKERS,
+    TASK_CLEANUP_TIME,
+    USE_GCS,
+)
+from src.auth import check_memory_limit
+from src.json_utils import load_tasks, save_tasks, load_keys
+from src.storage_utils import StorageManager
+
+# Initialize logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Initialize global objects
 executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 storage_manager = StorageManager()
 
+# Ensure download directory exists
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
-def notify_webhook(webhook_url, data, max_retries=3):
-    """Send webhook notification with retries"""
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(webhook_url, json=data, timeout=10)
-            if response.ok:
-                return True
-            print(f"Webhook notification attempt {attempt + 1} failed: {response.status_code}")
-        except requests.exceptions.RequestException as e:
-            print(f"Webhook notification attempt {attempt + 1} failed: {e}")
-        
-        # Wait a bit before retrying
-        time.sleep(2 ** attempt)
+def get_public_url(file_path, bucket_name):
+    """Generate a public GCS URL for the file"""
+    clean_path = file_path.replace('/files/', '')
+    return f"https://storage.googleapis.com/{bucket_name}/{clean_path}"
+
+def notify_webhook(webhook_url, data, max_retries=3, initial_delay=1):
+    """Enhanced webhook notification with exponential backoff"""
+    logger = logging.getLogger(__name__)
     
-    return False
+    # Configure session with retry strategy
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=max_retries,
+        backoff_factor=2,  # exponential backoff
+        status_forcelist=[408, 429, 500, 502, 503, 504],
+        allowed_methods=["POST"]  # Explicitly allow POST for retries
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    try:
+        response = session.post(
+            webhook_url, 
+            json=data,
+            headers={'Content-Type': 'application/json'},
+            timeout=30
+        )
+        response.raise_for_status()
+        logger.info(f"Webhook notification successful: {response.status_code}")
+        return True
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Webhook notification failed after {max_retries} retries: {str(e)}")
+        return False
 
 def send_webhook_notification(task_id, file_path, base_url=None):
-    """Helper method to send webhook notification"""
+    """Enhanced webhook notification handler"""
+    logger = logging.getLogger(__name__)
     tasks = load_tasks()
     task = tasks.get(task_id)
     
-    if task and task.get('webhook_url'):
-        try:
-            # Construct the file URL 
-            file_url = f"/files/{task_id}/{os.path.basename(file_path)}"
-            
-            # Use provided base_url or fallback to environment variable
+    if not task or not task.get('webhook_url'):
+        logger.warning(f"No webhook URL found for task {task_id}")
+        return
+    
+    try:
+        # Generate the appropriate file URL based on storage type
+        if USE_GCS:
+            file_url = get_public_url(file_path, GCS_BUCKET_NAME)
+        else:
             if base_url is None:
                 base_url = os.environ.get('APP_BASE_URL', 'http://localhost:5000')
+            file_url = f"{base_url.rstrip('/')}{file_path}"
+        
+        webhook_data = {
+            'status': 'completed',
+            'task_id': task_id,
+            'file_url': file_url,
+            'task_type': task.get('task_type', 'unknown'),
+            'original_url': task.get('url'),
+            'completion_time': datetime.now().isoformat(),
+            'storage_type': 'gcs' if USE_GCS else 'local'
+        }
+        
+        logger.info(f"Sending webhook for task {task_id} to {task['webhook_url']}")
+        success = notify_webhook(task['webhook_url'], webhook_data)
+        
+        if not success:
+            # Update task status to reflect webhook failure
+            tasks[task_id].update({
+                'webhook_status': 'failed',
+                'webhook_error': 'Failed to send webhook notification'
+            })
+            save_tasks(tasks)
             
-            webhook_data = {
-                'status': 'completed',
-                'task_id': task_id,
-                'file_url': file_url,
-                'download_url': f"{base_url.rstrip('/')}{file_url}",
-                'task_type': task.get('task_type', 'unknown')  # Add task type for more context
-            }
+    except Exception as e:
+        logger.error(f"Error in webhook notification for task {task_id}: {str(e)}")
+        # Update task status
+        tasks[task_id].update({
+            'webhook_status': 'failed',
+            'webhook_error': str(e)
+        })
+        save_tasks(tasks)
+
+    """Enhanced webhook notification handler"""
+    from config import GCS_BUCKET_NAME, USE_GCS
+    logger = logging.getLogger(__name__)
+    tasks = load_tasks()
+    task = tasks.get(task_id)
+    
+    if not task or not task.get('webhook_url'):
+        return
+    
+    try:
+        # Generate the appropriate file URL
+        if USE_GCS:
+            file_url = get_public_url(file_path, GCS_BUCKET_NAME)
+        else:
+            if base_url is None:
+                base_url = os.environ.get('APP_BASE_URL', 'http://localhost:5000')
+            file_url = f"{base_url.rstrip('/')}{file_path}"
+        
+        webhook_data = {
+            'status': 'completed',
+            'task_id': task_id,
+            'file_url': file_url,
+            'task_type': task.get('task_type', 'unknown'),
+            'original_url': task.get('url'),
+            'completion_time': datetime.now().isoformat()
+        }
+        
+        logger.info(f"Sending webhook for task {task_id} to {task['webhook_url']}")
+        success = notify_webhook(task['webhook_url'], webhook_data)
+        
+        if not success:
+            logger.error(f"Failed to send webhook for task {task_id}")
             
-            # Improved logging
-            print(f"Sending webhook for task {task_id} to {task['webhook_url']}")
-            
-            # Send webhook notification
-            success = notify_webhook(task['webhook_url'], webhook_data)
-            
-            if not success:
-                print(f"Webhook notification failed for task {task_id}")
-        except Exception as e:
-            print(f"Error in webhook notification for task {task_id}: {e}")
+    except Exception as e:
+        logger.error(f"Error in webhook notification for task {task_id}: {str(e)}")
 
 def get_info(task_id, url):
     try:
