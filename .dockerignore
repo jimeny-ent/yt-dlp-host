@@ -1,0 +1,11 @@
+# .dockerignore
+**/__pycache__
+**/.git
+**/.env
+**/*.mp4
+**/*.mkv
+**/*.webm
+**/*.m4a
+**/*.mp3
+downloaded_video.mp4
+jsons/api_keys.json

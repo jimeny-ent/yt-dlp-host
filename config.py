@@ -1,7 +1,13 @@
+import os
+
 # File system
-DOWNLOAD_DIR = '/app/downloads'
-TASKS_FILE = 'jsons/tasks.json'
-KEYS_FILE = 'jsons/api_keys.json'
+DOWNLOAD_DIR = os.getenv('DOWNLOAD_DIR', '/app/downloads')
+TASKS_FILE = os.getenv('TASKS_FILE', 'jsons/tasks.json')
+KEYS_FILE = os.getenv('KEYS_FILE', 'jsons/api_keys.json')
+
+# Google Cloud Storage settings
+GCS_BUCKET_NAME = os.getenv('GCS_BUCKET_NAME', 'nca-toolkit-bucket-jimeny')
+USE_GCS = os.getenv('USE_GCS', 'False').lower() == 'true'
 
 # Task management
 TASK_CLEANUP_TIME = 10  # minutes
