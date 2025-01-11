@@ -21,6 +21,7 @@ def generate_random_id(length=16):
 def get_video():
     data = request.json
     url = data.get('url')
+    webhook_url = data.get('webhook_url')  # New parameter
     video_format = data.get('video_format', 'bestvideo')
     audio_format = data.get('audio_format', 'bestaudio')
     start_time = data.get('start_time')
@@ -37,6 +38,7 @@ def get_video():
         'status': 'waiting',
         'task_type': 'get_video',
         'url': url,
+        'webhook_url': webhook_url,  # Store webhook URL
         'video_format': video_format,
         'audio_format': audio_format,
         'start_time': start_time,

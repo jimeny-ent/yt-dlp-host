@@ -7,7 +7,7 @@ KEYS_FILE = os.getenv('KEYS_FILE', 'jsons/api_keys.json')
 
 # Google Cloud Storage settings
 GCS_BUCKET_NAME = os.getenv('GCS_BUCKET_NAME', 'nca-toolkit-bucket-jimeny')
-USE_GCS = os.getenv('USE_GCS', 'False').lower() == 'true'
+USE_GCS = os.getenv('USE_GCS', 'True').lower() == 'true'
 
 # Task management
 TASK_CLEANUP_TIME = 10  # minutes

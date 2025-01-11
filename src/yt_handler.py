@@ -6,6 +6,8 @@ from src.auth import check_memory_limit
 from src.storage_utils import StorageManager
 import yt_dlp, os, threading, json, time, shutil
 from yt_dlp.utils import download_range_func
+import requests
+from flask import current_app, request
 
 executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 storage_manager = StorageManager()
@@ -13,7 +15,54 @@ storage_manager = StorageManager()
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
-# [Previous helper functions remain the same: get_format_size, get_best_format_size, check_and_get_size]
+def notify_webhook(webhook_url, data, max_retries=3):
+    """Send webhook notification with retries"""
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(webhook_url, json=data, timeout=10)
+            if response.ok:
+                return True
+            print(f"Webhook notification attempt {attempt + 1} failed: {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            print(f"Webhook notification attempt {attempt + 1} failed: {e}")
+        
+        # Wait a bit before retrying
+        time.sleep(2 ** attempt)
+    
+    return False
+
+def send_webhook_notification(task_id, file_path, base_url=None):
+    """Helper method to send webhook notification"""
+    tasks = load_tasks()
+    task = tasks.get(task_id)
+    
+    if task and task.get('webhook_url'):
+        try:
+            # Construct the file URL 
+            file_url = f"/files/{task_id}/{os.path.basename(file_path)}"
+            
+            # Use provided base_url or fallback to environment variable
+            if base_url is None:
+                base_url = os.environ.get('APP_BASE_URL', 'http://localhost:5000')
+            
+            webhook_data = {
+                'status': 'completed',
+                'task_id': task_id,
+                'file_url': file_url,
+                'download_url': f"{base_url.rstrip('/')}{file_url}",
+                'task_type': task.get('task_type', 'unknown')  # Add task type for more context
+            }
+            
+            # Improved logging
+            print(f"Sending webhook for task {task_id} to {task['webhook_url']}")
+            
+            # Send webhook notification
+            success = notify_webhook(task['webhook_url'], webhook_data)
+            
+            if not success:
+                print(f"Webhook notification failed for task {task_id}")
+        except Exception as e:
+            print(f"Error in webhook notification for task {task_id}: {e}")
 
 def get_info(task_id, url):
     try:
@@ -42,6 +91,9 @@ def get_info(task_id, url):
             tasks[task_id]['completed_time'] = datetime.now().isoformat()
             tasks[task_id]['file'] = stored_path
             save_tasks(tasks)
+
+            # Send webhook notification
+            send_webhook_notification(task_id, stored_path)
 
             # Clean up temp files
             shutil.rmtree(temp_path, ignore_errors=True)
@@ -117,6 +169,9 @@ def get(task_id, url, type, video_format="bestvideo", audio_format="bestaudio"):
             tasks[task_id]['file'] = stored_path
             save_tasks(tasks)
 
+            # Send webhook notification
+            send_webhook_notification(task_id, stored_path)
+
             # Clean up temp files
             shutil.rmtree(temp_path, ignore_errors=True)
             
@@ -170,6 +225,9 @@ def get_live(task_id, url, type, start, duration, video_format="bestvideo", audi
             tasks[task_id]['completed_time'] = datetime.now().isoformat()
             tasks[task_id]['file'] = stored_path
             save_tasks(tasks)
+
+            # Send webhook notification
+            send_webhook_notification(task_id, stored_path)
 
             # Clean up temp files
             shutil.rmtree(temp_path, ignore_errors=True)

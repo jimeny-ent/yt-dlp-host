@@ -15,20 +15,33 @@ class StorageManager:
             os.makedirs(path)
 
     def save_file(self, source_path, destination_path):
-        """
-        Save a file to either GCS or local storage.
-        source_path: local path where file currently exists
-        destination_path: path where file should be stored (without /files/ prefix)
-        """
-        if USE_GCS:
+    """
+    Save a file to either GCS or local storage.
+    source_path: local path where file currently exists
+    destination_path: path where file should be stored (without /files/ prefix)
+    """
+    if USE_GCS:
+        try:
+            print(f"GCS Debug - Attempting to save file:")
+            print(f"  Source path: {source_path}")
+            print(f"  Destination path: {destination_path}")
+            print(f"  Bucket: {self.bucket.name}")
+            
             blob = self.bucket.blob(destination_path)
             blob.upload_from_filename(source_path)
+            
+            print(f"GCS Debug - File saved successfully")
+            print(f"  Blob name: {blob.name}")
+            print(f"  Blob size: {blob.size}")
             return f'/files/{destination_path}'
-        else:
-            dest_full_path = os.path.join(DOWNLOAD_DIR, destination_path)
-            os.makedirs(os.path.dirname(dest_full_path), exist_ok=True)
-            shutil.copy2(source_path, dest_full_path)
-            return f'/files/{destination_path}'
+        except Exception as e:
+            print(f"GCS Debug - Error saving file: {str(e)}")
+            raise
+    else:
+        dest_full_path = os.path.join(DOWNLOAD_DIR, destination_path)
+        os.makedirs(os.path.dirname(dest_full_path), exist_ok=True)
+        shutil.copy2(source_path, dest_full_path)
+        return f'/files/{destination_path}'
 
     def get_file(self, file_path):
         """Get a file from storage"""

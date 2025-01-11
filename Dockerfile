@@ -13,6 +13,7 @@ COPY . .
 ENV PORT=8080
 ENV FLASK_APP=src/server.py
 ENV FLASK_ENV=production
+ENV APP_BASE_URL=https://youtube-downloader-api-1010279005443.europe-west1.run.app
 
 EXPOSE 8080
 
