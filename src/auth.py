@@ -1,10 +1,25 @@
 from functools import wraps
 from flask import request, jsonify
 from src.json_utils import load_keys, save_keys, load_tasks
-from config import REQUEST_LIMIT, TASK_CLEANUP_TIME, DEFAULT_MEMORY_QUOTA
-from config import DEFAULT_MEMORY_QUOTA_RATE, AVAILABLE_MEMORY
+from config import (
+    REQUEST_LIMIT, 
+    TASK_CLEANUP_TIME, 
+    DEFAULT_MEMORY_QUOTA,
+    DEFAULT_MEMORY_QUOTA_RATE, 
+    AVAILABLE_MEMORY
+)
 from datetime import datetime, timedelta
 import secrets
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 def generate_key():
     return secrets.token_urlsafe(32)
@@ -159,4 +174,33 @@ def get_key_info(api_key):
     key_info = next((item for item in keys.values() if item['key'] == api_key), None)
     return key_info
 
-if load_keys() == {}: create_api_key("admin", ["create_key", "delete_key", "get_key", "get_keys", "get_video", "get_audio", "get_live_video", "get_live_audio", "get_info"])
+def init_admin_key():
+    """Initialize admin key if no keys exist"""
+    try:
+        keys = load_keys()
+        if not keys:
+            logger.info("No keys found, creating admin key...")
+            create_api_key(
+                "admin", 
+                [
+                    "create_key", 
+                    "delete_key", 
+                    "get_key", 
+                    "get_keys", 
+                    "get_video", 
+                    "get_audio", 
+                    "get_live_video", 
+                    "get_live_audio", 
+                    "get_info"
+                ]
+            )
+            logger.info("Admin key created successfully")
+    except Exception as e:
+        logger.error(f"Error initializing admin key: {str(e)}")
+        raise
+
+if __name__ == '__main__':
+    init_admin_key()
+else:
+    # For production/gunicorn environment
+    init_admin_key()

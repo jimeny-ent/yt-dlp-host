@@ -2,8 +2,8 @@ from flask import Flask, request, jsonify, send_from_directory, send_file
 from src.json_utils import load_tasks, save_tasks, load_keys
 from src.storage_utils import StorageManager
 from config import DOWNLOAD_DIR, USE_GCS
-import src.yt_handler as yt_handler
-import src.auth as auth
+from src import yt_handler
+from src import auth
 import random
 import string
 import tempfile
@@ -18,6 +18,7 @@ def generate_random_id(length=16):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
 @app.route('/get_video', methods=['POST'])
+@auth.check_api_key('get_video')
 def get_video():
     data = request.json
     url = data.get('url')

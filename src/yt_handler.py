@@ -5,6 +5,7 @@ import os
 import shutil
 import threading
 import time
+import atexit
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
@@ -459,9 +460,30 @@ def cleanup_orphaned_folders():
                 blob.delete()
                 logger.info(f"Removed orphaned GCS file: {blob.name}")
 
+def cleanup():
+    """Cleanup function to shutdown the executor properly"""
+    logger.info("Shutting down executor...")
+    executor.shutdown(wait=True)
+    logger.info("Executor shutdown complete")
 
+def init_background_tasks():
+    """Initialize background tasks and return the thread"""
+    logger.info("Initializing background tasks...")
+    cleanup_processing_tasks()
+    cleanup_orphaned_folders()
+    thread = threading.Thread(target=process_tasks, daemon=True)
+    thread.start()
+    logger.info("Background tasks initialized")
+    return thread
 
-cleanup_processing_tasks()
-cleanup_orphaned_folders()
-thread = threading.Thread(target=process_tasks, daemon=True)
-thread.start()
+# Register cleanup
+atexit.register(cleanup)
+
+# Initialize background tasks
+background_thread = None
+
+if __name__ == '__main__':
+    background_thread = init_background_tasks()
+else:
+    # For production/gunicorn environment
+    background_thread = init_background_tasks()

@@ -1,5 +1,5 @@
 from config import TASKS_FILE, KEYS_FILE, USE_GCS
-from storage_utils import StorageManager
+from src.storage_utils import StorageManager
 import os
 import json
 
