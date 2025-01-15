@@ -1,8 +1,5 @@
 FROM python:3.9-slim
 
-# Create non-root user for security
-RUN useradd -m -r -u 1001 appuser
-
 WORKDIR /app
 
 # Install system dependencies and build tools
@@ -18,6 +15,9 @@ RUN apt-get update && \
         && apt-get clean \
         && rm -rf /var/lib/apt/lists/*
 
+# Create non-root user for security
+RUN useradd -m -r -u 1001 appuser
+
 # Install Python packages one by one
 RUN pip install --no-cache-dir Flask==3.0.3
 RUN pip install --no-cache-dir gunicorn==21.2.0
@@ -25,8 +25,11 @@ RUN pip install --no-cache-dir google-cloud-storage==2.14.0
 RUN pip install --no-cache-dir requests==2.31.0
 RUN pip install --no-cache-dir yt-dlp==2024.8.6
 
-# Create necessary directories first
-RUN mkdir -p /app/downloads /app/jsons /app/src
+# Create necessary directories with proper ownership and permissions
+RUN mkdir -p /app/downloads /app/jsons /app/src && \
+    chown -R appuser:appuser /app && \
+    chmod -R 755 /app && \
+    chmod -R 777 /app/downloads
 
 # Copy files with explicit paths to maintain structure
 COPY config.py /app/
@@ -37,9 +40,11 @@ COPY jsons/ /app/jsons/
 # Create empty __init__.py if it doesn't exist
 RUN touch /app/src/__init__.py
 
-# Set proper permissions
+# Set final permissions after all files are copied
 RUN chown -R appuser:appuser /app && \
-    chmod -R 755 /app
+    chmod -R 644 /app/config.py /app/requirements.txt && \
+    chmod -R 755 /app/src /app/jsons && \
+    chmod 777 /app/downloads
 
 # Switch to non-root user
 USER appuser

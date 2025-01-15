@@ -8,6 +8,8 @@ KEYS_FILE = os.getenv('KEYS_FILE', 'jsons/api_keys.json')
 # Google Cloud Storage settings
 GCS_BUCKET_NAME = os.getenv('GCS_BUCKET_NAME')
 USE_GCS = os.getenv('USE_GCS', 'True').lower() == 'true'
+SYSTEM_FILES_USE_GCS = False  # Force system files to stay local
+JSONS_DIR = os.getenv('JSONS_DIR', 'jsons')  # Directory for system JSON files
 
 # Task management
 TASK_CLEANUP_TIME = 10  # minutes

@@ -260,6 +260,7 @@ def get_info(task_id, url):
 
         temp_path = os.path.join(DOWNLOAD_DIR, task_id)
         os.makedirs(temp_path, exist_ok=True)
+        os.chmod(temp_path, 0o777)
 
         ydl_opts = {'quiet': True, 'no_warnings': True, 'extract_flat': True, 'skip_download': True}
 
@@ -298,70 +299,69 @@ def get(task_id, url, type, video_format="bestvideo", audio_format="bestaudio"):
 
         logger.info(f"Starting download for task {task_id} - URL: {url}")
         
-        total_size = check_and_get_size(url, video_format if type.lower() == 'video' else None, audio_format)
-        logger.info(f"Calculated total size: {total_size}")
-        
-        if total_size <= 0:
-            total_size = 100 * 1024 * 1024  # Use 100MB as fallback
-        
-        key_name = tasks[task_id].get('key_name')
-        keys = load_keys()
-        if key_name not in keys:
-            handle_task_error(task_id, "Invalid API key")
-            return
-        api_key = keys[key_name]['key']
-
-        if not check_memory_limit(api_key, total_size, task_id):
-            raise Exception("Memory limit exceeded. Maximum 5GB per 10 minutes.")
-        
+        # Create base temp directory with full permissions
         temp_path = os.path.join(DOWNLOAD_DIR, task_id)
         os.makedirs(temp_path, exist_ok=True)
+        os.chmod(temp_path, 0o777)
 
         output_template = 'video.%(ext)s' if type.lower() == 'video' else 'audio.%(ext)s'
         
+        # Define a progress hook that ensures directory exists for fragments
+        def ensure_fragment_dir(d):
+            if d.get('filename'):
+                frag_dir = os.path.dirname(d['filename'])
+                if frag_dir and not os.path.exists(frag_dir):
+                    os.makedirs(frag_dir, exist_ok=True)
+                    os.chmod(frag_dir, 0o777)
+            logger.info(f"Download progress: {d.get('status')} - {d.get('filename', 'unknown')}")
+
         ydl_opts = {
             'format': f'{video_format}+{audio_format}/best' if type.lower() == 'video' else f'{audio_format}/best',
             'outtmpl': os.path.join(temp_path, output_template),
             'merge_output_format': 'mp4' if type.lower() == 'video' else None,
             'allow_unplayable_formats': True,
             'no_check_certificate': True,
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': '*/*',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Origin': 'https://cloudflarestream.com',
-                'Referer': 'https://cloudflarestream.com/'
-            },
             'verbose': True,
-            'external_downloader_args': ['--no-check-certificate'],
-            'concurrent_fragments': 5
+            'progress_hooks': [ensure_fragment_dir],
+            'concurrent_fragments': 3,
+            'retries': 10,  # Increase retries
+            'fragment_retries': 10,  # Add fragment retries
+            'continuedl': True,  # Continue partial downloads
+            'buffersize': 1024  # Reduced buffer size for more stable downloads
         }
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
             
-            # Get the downloaded file name
-            downloaded_file = os.listdir(temp_path)[0]
+            # Get the downloaded file
+            downloaded_files = [f for f in os.listdir(temp_path) if not f.endswith('.part')]
+            if not downloaded_files:
+                raise Exception("No complete files found after download")
+                
+            downloaded_file = downloaded_files[0]
             local_file_path = os.path.join(temp_path, downloaded_file)
             
-            # Upload to storage and get the path
+            # Upload to GCS
             stored_path = storage_manager.save_file(
                 local_file_path, 
                 f'{task_id}/{downloaded_file}'
             )
-
+            
+            # Update task status
             tasks = load_tasks()
-            tasks[task_id].update(status='completed')
-            tasks[task_id]['completed_time'] = datetime.now().isoformat()
-            tasks[task_id]['file'] = stored_path
+            tasks[task_id].update({
+                'status': 'completed',
+                'completed_time': datetime.now().isoformat(),
+                'file': stored_path
+            })
             save_tasks(tasks)
-
+            
+            # Clean up temp directory
+            shutil.rmtree(temp_path, ignore_errors=True)
+            
             # Send webhook notification
             send_webhook_notification(task_id, stored_path)
-
-            # Clean up temp files
-            shutil.rmtree(temp_path, ignore_errors=True)
             
         except Exception as e:
             logger.error(f"Download error: {str(e)}")
@@ -379,6 +379,7 @@ def get_live(task_id, url, type, start, duration, video_format="bestvideo", audi
         
         temp_path = os.path.join(DOWNLOAD_DIR, task_id)
         os.makedirs(temp_path, exist_ok=True)
+        os.chmod(temp_path, 0o777)
 
         current_time = int(time.time())
         start_time = current_time - start

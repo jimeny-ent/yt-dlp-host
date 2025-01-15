@@ -8,10 +8,15 @@ services:
       - ./downloads:/app/downloads
       - ./jsons:/app/jsons
       - ./config.py:/app/config.py
+      - task-persistence:/app/jsons  # Replace contents of /app/jsons with persistent volume
     environment:
       - FLASK_APP=src.server:app
       - FLASK_RUN_HOST=0.0.0.0
       - PORT=8080
       - USE_GCS=True
       - GCS_BUCKET_NAME=nca-toolkit-bucket-jimeny
+      - SYSTEM_FILES_DIR=/app/jsons  # Add new environment variable
     restart: unless-stopped
+
+volumes:
+  task-persistence:  # Named volume for persistent storage
